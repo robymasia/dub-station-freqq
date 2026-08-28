@@ -50,33 +50,70 @@ class Isolator:
     # Filter design / state management
     # ------------------------------------------------------------------ #
     def _design_filters(self):
-        """Design Butterworth SOS filters for each band."""
+        """Design the crossover filter network.
+
+        BUGFIX: the previous implementation built four *independent*
+        Butterworth filters (low-pass / band-pass / band-pass / high-pass)
+        and summed their outputs. Because two overlapping band-pass
+        filters are ~180 deg out of phase at their shared crossover, the
+        summed output cancelled almost completely at the BASS/MIDS
+        crossover (a ~-40 dB notch at 250 Hz) even with every band at 0 dB.
+        The isolator therefore coloured the signal heavily instead of
+        being transparent when nothing was killed, and killing one band
+        changed the level of the neighbouring bands instead of removing a
+        single band cleanly.
+
+        The bands are now split with a **Linkwitz-Riley** crossover network
+        (the de-facto standard for DJ isolators). A Linkwitz-Riley section
+        is a Butterworth section applied twice (``H(z)**2``); the adjacent
+        low-pass and high-pass of a crossover are then perfectly in phase,
+        so they sum flat (no notch) while each band still rolls off
+        steeply. Killing a band now removes exactly that band without
+        boosting its neighbours.
+
+        The tree is::
+
+            sub  = LR_LP(80)
+            hi80 = LR_HP(80)
+                bass = LR_LP(250, hi80)
+                hi250 = LR_HP(250, hi80)
+                    mids = LR_LP(4000, hi250)
+                    tops = LR_HP(4000, hi250)
+
+        A Linkwitz-Riley section is realised by stacking the same
+        second-order Butterworth SOS twice, so a single ``sosfilt`` call
+        (with a single delay-state) evaluates ``H(z)**2``.
+        """
         nyq = self.samplerate / 2.0
 
         # Guard against invalid frequencies for very low sample rates.
         def _norm(f):
             return min(max(f / nyq, 1e-4), 0.999)
 
+        # Second-order Butterworth prototype -> Linkwitz-Riley (4th order)
+        # obtained by cascading (stacking) the section with itself.
+        def _lr(freq, btype):
+            sos = signal.butter(2, _norm(freq), btype=btype, output="sos")
+            return np.vstack([sos, sos])
+
         self._sos = {
-            "sub": signal.butter(self.order, _norm(self.SUB_HI),
-                                  btype="lowpass", output="sos"),
-            "bass": signal.butter(self.order // 2,
-                                   [_norm(self.BASS_LO), _norm(self.BASS_HI)],
-                                   btype="bandpass", output="sos"),
-            "mids": signal.butter(self.order // 2,
-                                   [_norm(self.MIDS_LO), _norm(self.MIDS_HI)],
-                                   btype="bandpass", output="sos"),
-            "tops": signal.butter(self.order, _norm(self.TOPS_LO),
-                                   btype="highpass", output="sos"),
+            "lp80": _lr(self.SUB_HI, "lowpass"),
+            "hp80": _lr(self.SUB_HI, "highpass"),
+            "lp250": _lr(self.BASS_HI, "lowpass"),
+            "hp250": _lr(self.BASS_HI, "highpass"),
+            "lp4000": _lr(self.MIDS_HI, "lowpass"),
+            "hp4000": _lr(self.MIDS_HI, "highpass"),
         }
+        # Ordered list of the four bands the UI exposes.
+        self._bands = ("sub", "bass", "mids", "tops")
 
     def _init_states(self):
-        """Initialise per-band filter delay states (stereo)."""
+        """Initialise per-crossover filter delay states (stereo)."""
         self._zi = {}
-        for band, sos in self._sos.items():
-            # zi shape: (n_sections, 2) per channel -> keep one per channel.
+        for name, sos in self._sos.items():
+            # One independent filter state per channel (L, R).
             zi = signal.sosfilt_zi(sos)
-            self._zi[band] = [zi.copy(), zi.copy()]  # L, R
+            self._zi[name] = [zi.copy(), zi.copy()]
 
     # ------------------------------------------------------------------ #
     # Parameter setters (thread-safe atomic writes)
@@ -134,16 +171,37 @@ class Isolator:
         out = np.zeros_like(x)
 
         with self._lock:
-            for band, sos in self._sos.items():
-                if self.kill[band]:
-                    continue
-                g = self.gain[band]
-                if g == 0.0:
-                    continue
-                for ch in range(chans):
-                    y, self._zi[band][ch] = signal.sosfilt(
-                        sos, x[:, ch], zi=self._zi[band][ch]
-                    )
-                    out[:, ch] += (y * g).astype(out.dtype)
+            for ch in range(chans):
+                xc = x[:, ch]
+                zi = self._zi
+
+                # Linkwitz-Riley crossover tree (see _design_filters).
+                sub, zi["lp80"][ch] = signal.sosfilt(
+                    self._sos["lp80"], xc, zi=zi["lp80"][ch])
+                hi80, zi["hp80"][ch] = signal.sosfilt(
+                    self._sos["hp80"], xc, zi=zi["hp80"][ch])
+
+                bass, zi["lp250"][ch] = signal.sosfilt(
+                    self._sos["lp250"], hi80, zi=zi["lp250"][ch])
+                hi250, zi["hp250"][ch] = signal.sosfilt(
+                    self._sos["hp250"], hi80, zi=zi["hp250"][ch])
+
+                mids, zi["lp4000"][ch] = signal.sosfilt(
+                    self._sos["lp4000"], hi250, zi=zi["lp4000"][ch])
+                tops, zi["hp4000"][ch] = signal.sosfilt(
+                    self._sos["hp4000"], hi250, zi=zi["hp4000"][ch])
+
+                bands = {"sub": sub, "bass": bass, "mids": mids, "tops": tops}
+
+                acc = np.zeros(frames, dtype=np.float64)
+                for band in self._bands:
+                    if self.kill[band]:
+                        continue
+                    g = self.gain[band]
+                    if g == 0.0:
+                        continue
+                    acc += bands[band] * g
+
+                out[:, ch] = acc.astype(out.dtype)
 
         return out
