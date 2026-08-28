@@ -23,6 +23,13 @@ _COMB_TUNING = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617]
 _ALLPASS_TUNING = [556, 441, 341, 225]
 _STEREO_SPREAD = 23
 
+# Canonical Freeverb output make-up gain applied to the wet signal.
+# BUGFIX: the wet path only had the 0.015 input "fixedgain" but was missing
+# Jezar's output "scalewet" (3.0). Without it the reverb tail came out about
+# 10 dB too quiet (~-28 dB below the dry signal even at SEND = 1.0), so the
+# effect sounded like it was barely doing anything / "not working".
+_SCALE_WET = 3.0
+
 
 class _Comb:
     """Comb filter with a one-pole low-pass in the feedback loop (damping)."""
@@ -148,7 +155,8 @@ class Reverb:
                     acc += c.process(mono)
                 for ap in self._allpasses[ch]:
                     acc = ap.process(acc)
-                wet[:, ch] = acc
+                # Apply the Freeverb output make-up gain (see _SCALE_WET).
+                wet[:, ch] = acc * _SCALE_WET
 
             # Optional pre/post filtering on the wet signal.
             if self.hpf:
