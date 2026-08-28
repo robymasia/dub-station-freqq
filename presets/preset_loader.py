@@ -45,11 +45,10 @@ class PresetLoader:
         
         # Applica Reverb
         if hasattr(self.engine, 'reverb'):
-            self.engine.reverb.set_decay_time(preset["reverb"]["decay_time"])
-            self.engine.reverb.set_wet_mix(preset["reverb"]["wet_mix"])
-            self.engine.reverb.set_dry_mix(preset["reverb"]["dry_mix"])
-            self.engine.reverb.set_pre_delay(preset["reverb"]["pre_delay"])
-            self.engine.reverb.set_damping(preset["reverb"]["damping"])
+            # Reverb usa: set_send (wet), set_decay, set_damp
+            self.engine.reverb.set_decay(preset["reverb"]["decay_time"])
+            self.engine.reverb.set_send(preset["reverb"]["wet_mix"])
+            self.engine.reverb.set_damp(preset["reverb"]["damping"])
         
         # Applica Dub Filter
         if hasattr(self.engine, 'dub_filter'):
@@ -66,7 +65,7 @@ class PresetLoader:
         
         print(f"✅ Preset 'dub_classic' applicato @ {bpm} BPM")
         print(f"   Delay: {delay_time*1000:.1f}ms ({preset['tape_echo']['note_division']})")
-        print(f"   Reverb: {preset['reverb']['decay_time']}s decay")
+        print(f"   Reverb: {preset['reverb']['decay_time']}s decay, send {preset['reverb']['wet_mix']*100:.0f}%")
     
     def get_preset_info(self, preset_name="dub_classic"):
         """Restituisce informazioni sul preset."""
@@ -78,7 +77,7 @@ class PresetLoader:
                 "characteristics": [
                     "Delay 1/4 note sincronizzato",
                     "Feedback 50% per echi lunghi",
-                    "Reverb 3s con wet 25%",
+                    "Reverb send 25% con decay 0.5",
                     "Filter resonance 50% per sweep",
                     "Master gain con headroom"
                 ]
