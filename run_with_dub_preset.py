@@ -18,7 +18,7 @@ import argparse
 
 # Import dal progetto
 from audio_engine import AudioEngine
-from midi_handler import MidiHandler
+from midi_handler import MIDIHandler
 from ui.main_window import MainWindow
 from presets import PresetLoader, DUB_CLASSIC_PRESET
 
@@ -58,7 +58,7 @@ def main():
     
     # Initialize MIDI handler
     print("🎹 Inizializzazione MIDI...")
-    midi = MidiHandler(engine)
+    midi = MIDIHandler(engine)
     
     # Apply dub classic preset
     print("🎚️ Applicazione preset dub classic...")
