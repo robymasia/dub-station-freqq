@@ -58,7 +58,7 @@ def main():
     
     # Initialize MIDI handler
     print("🎹 Inizializzazione MIDI...")
-    midi = MIDIHandler(engine)
+    midi = MIDIHandler()
     
     # Apply dub classic preset
     print("🎚️ Applicazione preset dub classic...")
