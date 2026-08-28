@@ -14,17 +14,29 @@ Oppure con BPM personalizzato:
 """
 
 import sys
-import argparse
+import signal
+import threading
 
-# Import dal progetto
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import Qt
+
 from audio_engine import AudioEngine
 from midi_handler import MIDIHandler
 from ui.main_window import MainWindow
 from presets import PresetLoader, DUB_CLASSIC_PRESET
 
+try:
+    from dsp._kernels import warmup as _kernel_warmup
+except Exception:
+    _kernel_warmup = None
+
+SAMPLERATE = 44100
+BLOCKSIZE = 512
+
 
 def parse_args():
     """Parse command line arguments."""
+    import argparse
     parser = argparse.ArgumentParser(
         description="Dub Station Freqq con preset Dub Classic"
     )
@@ -52,13 +64,27 @@ def main():
     print(f"   Preset: {args.preset}")
     print("-" * 40)
     
+    # High-DPI friendly
+    if hasattr(Qt, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    
+    app = QApplication(sys.argv)
+    app.setApplicationName("DubStation FreQQ")
+    
+    # Pre-compile DSP kernels
+    if _kernel_warmup is not None:
+        threading.Thread(target=_kernel_warmup, daemon=True).start()
+    
     # Initialize audio engine
     print("🔧 Inizializzazione audio engine...")
-    engine = AudioEngine()
+    engine = AudioEngine(samplerate=SAMPLERATE, blocksize=BLOCKSIZE)
     
     # Initialize MIDI handler
     print("🎹 Inizializzazione MIDI...")
     midi = MIDIHandler()
+    
+    # Start audio
+    started = engine.start()
     
     # Apply dub classic preset
     print("🎚️ Applicazione preset dub classic...")
@@ -78,17 +104,33 @@ def main():
     print("-" * 40)
     print("✅ Pronto! Avvio interfaccia...\n")
     
-    # Create and run main window (passa engine E midi)
-    app = MainWindow(engine, midi=midi)
-    app.mainloop()
+    # Create main window
+    window = MainWindow(engine, midi)
+    
+    # Show audio status messages
+    if not engine.available():
+        QMessageBox.warning(
+            window, "Audio",
+            f"The 'sounddevice' backend is not available.\nDetails: {engine.import_error()}\n\n"
+            "Install requirements and audio driver, then restart.")
+    elif not started:
+        QMessageBox.information(
+            window, "Audio",
+            f"Audio did not start with default devices.\nDetails: {engine.last_error}\n\n"
+            "Open 'Device Settings' to choose input/output.")
+    
+    window.show()
+    
+    # Allow Ctrl+C to quit
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    
+    exit_code = app.exec()
+    
+    # Clean shutdown
+    engine.stop()
+    midi.close()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n👋 Arrivederci!")
-        sys.exit(0)
-    except Exception as e:
-        print(f"\n❌ Errore: {e}")
-        sys.exit(1)
+    main()
